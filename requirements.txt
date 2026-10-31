@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+google-genai
+dotenv
+geocoder
+numpy
+websockets
