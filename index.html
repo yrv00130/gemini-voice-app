@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gemini 自律拡張型 音声アシスタント</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      text-align: center;
+      padding: 30px 15px;
+      background: #f4f7f6;
+      color: #333;
+    }
+    .card {
+      max-width: 400px;
+      margin: 0 auto;
+      background: white;
+      padding: 25px;
+      border-radius: 12px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    }
+    h2 { font-size: 20px; margin-bottom: 20px; color: #1a73e8; }
+    #status {
+      margin-top: 20px;
+      font-weight: bold;
+      color: #555;
+      min-height: 24px;
+    }
+    button {
+      padding: 14px 28px;
+      font-size: 16px;
+      font-weight: bold;
+      cursor: pointer;
+      border-radius: 25px;
+      border: none;
+      background: #1a73e8;
+      color: white;
+      transition: background 0.3s;
+    }
+    button:hover { background: #1557b0; }
+    button:disabled { background: #ccc; cursor: not-allowed; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>Gemini 音声アシスタント</h2>
+    <button id="startBtn">会話を開始する</button>
+    <div id="status">ボタンを押して会話を開始してください</div>
+  </div>
+
+  <script>
+    // =========================================================
+    // 【変更点】Renderで取得したURLを設定してください
+    // ※ 先頭は 「wss://」 、末尾には 「/ws」 を付けます
+    // =========================================================
+    const WS_URL = "wss://gemini-voice-backend-leh3.onrender.com/ws";
+    // =========================================================
+
+    let socket, audioCtx, micStream, scriptProcessor;
+
+    document.getElementById("startBtn").onclick = async () => {
+      const startBtn = document.getElementById("startBtn");
+      const statusDiv = document.getElementById("status");
+
+      startBtn.disabled = true;
+      statusDiv.innerText = "サーバーに接続中...";
+
+      try {
+        // 音声再生用のオーディオコンテキスト（24kHz）
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
+        socket = new WebSocket(WS_URL);
+
+        socket.onopen = async () => {
+          statusDiv.innerText = "会話中（マイクに向かってお話しください）";
+          
+          // 16kHz PCM マイク入力の取得
+          micStream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 16000, channelCount: 1 } });
+          const inputCtx = new AudioContext({ sampleRate: 16000 });
+          const source = inputCtx.createMediaStreamSource(micStream);
+          scriptProcessor = inputCtx.createScriptProcessor(2048, 1, 1);
+
+          scriptProcessor.onaudioprocess = (e) => {
+            if (socket && socket.readyState === WebSocket.OPEN) {
+              const inputData = e.inputBuffer.getChannelData(0);
+              const pcm16 = new Int16Array(inputData.length);
+              for (let i = 0; i < inputData.length; i++) {
+                pcm16[i] = Math.max(-1, Math.min(1, inputData[i])) * 0x7FFF;
+              }
+              socket.send(pcm16.buffer);
+            }
+          };
+
+          source.connect(scriptProcessor);
+          scriptProcessor.connect(inputCtx.destination);
+        };
+
+        // サーバーからの PCM 音声データを受信して再生
+        socket.onmessage = async (event) => {
+          const arrayBuffer = await event.data.arrayBuffer();
+          const int16Array = new Int16Array(arrayBuffer);
+          const float32Array = new Float32Array(int16Array.length);
+          for (let i = 0; i < int16Array.length; i++) {
+            float32Array[i] = int16Array[i] / 32768.0;
+          }
+
+          const buffer = audioCtx.createBuffer(1, float32Array.length, 24000);
+          buffer.getChannelData(0).set(float32Array);
+          const source = audioCtx.createBufferSource();
+          source.buffer = buffer;
+          source.connect(audioCtx.destination);
+          source.start();
+        };
+
+        socket.onclose = () => {
+          statusDiv.innerText = "切断されました。再度お試しください。";
+          startBtn.disabled = false;
+        };
+
+        socket.onerror = (err) => {
+          console.error("WebSocket Error:", err);
+          statusDiv.innerText = "接続エラーが発生しました。";
+          startBtn.disabled = false;
+        };
+
+      } catch (err) {
+        console.error(err);
+        statusDiv.innerText = "マイクの起動に失敗しました。";
+        startBtn.disabled = false;
+      }
+    };
+  </script>
+</body>
+</html>
